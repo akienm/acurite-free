@@ -13,6 +13,21 @@ write_path = ~/AcuRite
 ; 5678 = Garage
 ; 9012 = Roof
 
+[hub]
+; AcuRite Access 09155M hub HTTP listener.
+; Configure your hub to POST to this machine instead of AcuRite's cloud:
+;   1. Install acuparse (https://github.com/acuparse/acuparse) and use its
+;      hub-redirect script, OR point your router's DNS for "atlasapi.myacurite.com"
+;      and "hubapi.myacurite.com" to this machine's IP.
+;   2. Set port = 80 and run as root, or use port = 8080 and forward 80→8080
+;      on your router.
+
+; Port for the hub HTTP listener (80 requires root; use 8080 + port-forward).
+port = 80
+
+; Display name for the AcuRite Atlas outdoor sensor.
+atlas_name = AcuRite Atlas
+
 [weather_underground]
 ; Optional — set enabled = true and fill in your WU station credentials.
 enabled = false

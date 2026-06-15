@@ -37,6 +37,7 @@ import time
 import urllib.parse
 import urllib.request
 from datetime import datetime, timezone
+from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 
 log = logging.getLogger("acurite")
@@ -48,7 +49,8 @@ WU_URL = "https://weatherstation.wunderground.com/weatherstation/updateweatherst
 CSV_FIELDS = [
     "timestamp", "sensor_id", "sensor_name", "model",
     "temp_f", "humidity_pct", "wind_mph", "wind_dir_deg",
-    "rain_in", "battery_ok",
+    "wind_gust_mph", "rain_in", "pressure_inhg", "dew_point_f",
+    "uv_index", "battery_ok",
 ]
 
 
@@ -182,6 +184,112 @@ def upload_wu(cfg: configparser.ConfigParser, packet: dict) -> None:
         log.warning("WU upload failed: %s", exc)
 
 
+# ── Hub listener (AcuRite Access 09155M) ─────────────────────────────────────
+
+# Per-sensor state — merged across the two messages the hub sends per cycle.
+# Maps sensor_id → {field: value}. Written to CSV on each update.
+_hub_state: dict[str, dict] = {}
+_hub_lock = threading.Lock()
+
+
+def _make_hub_handler(cfg: configparser.ConfigParser, csv_path: Path, sensors: dict):
+    """Return a request handler class closed over the runtime state."""
+
+    atlas_name = cfg.get("hub", "atlas_name", fallback="AcuRite Atlas")
+
+    class HubHandler(BaseHTTPRequestHandler):
+        def log_message(self, fmt, *args):  # silence default access log
+            pass
+
+        def _send_json(self, body: dict):
+            data = json.dumps(body).encode()
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+
+        def do_GET(self):
+            parsed = urllib.parse.urlparse(self.path)
+            params = dict(urllib.parse.parse_qsl(parsed.query))
+
+            if parsed.path == "/weatherstation/updateweatherstation":
+                self._handle_wu(params)
+            else:
+                log.info("HUB unknown path: %s params=%s", parsed.path, params)
+                self._send_json({"success": 1, "checkversion": "224"})
+
+        def do_POST(self):
+            length = int(self.headers.get("Content-Length", 0))
+            body = self.rfile.read(length).decode(errors="replace")
+            parsed = urllib.parse.urlparse(self.path)
+            log.info("HUB POST %s body=%s", parsed.path, body[:200])
+            self._send_json({"success": 1, "checkversion": "224"})
+
+        def _handle_wu(self, p: dict):
+            hub_id = p.get("ID", "hub")
+            sensor_id = f"atlas_{hub_id}"
+            sensor_name = sensors.get(sensor_id, atlas_name)
+
+            def _f(key):
+                v = p.get(key)
+                return None if v is None else float(v)
+
+            update = {
+                "sensor_id": sensor_id,
+                "sensor_name": sensor_name,
+                "model": "AcuRite Atlas",
+                "temp_f": _f("tempf"),
+                "humidity_pct": _f("humidity"),
+                "wind_mph": _f("windspeedmph"),
+                "wind_dir_deg": _f("winddir"),
+                "wind_gust_mph": _f("windgustmph"),
+                "rain_in": _f("rainin"),
+                "pressure_inhg": _f("baromin"),
+                "dew_point_f": _f("dewptf"),
+                "uv_index": _f("UV"),
+                "battery_ok": None,
+            }
+
+            with _hub_lock:
+                prev = _hub_state.get(sensor_id, {})
+                merged = {k: (update[k] if update[k] is not None else prev.get(k))
+                          for k in update}
+                _hub_state[sensor_id] = merged
+
+            now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+            row = {"timestamp": now, **merged}
+            append_csv(csv_path, row)
+            log.info(
+                "HUB atlas sensor=%s temp_f=%s humidity=%s wind_mph=%s",
+                sensor_name,
+                merged.get("temp_f"), merged.get("humidity_pct"), merged.get("wind_mph"),
+            )
+
+            threading.Thread(
+                target=upload_wu, args=(cfg, merged), daemon=True
+            ).start()
+
+            self._send_json({"success": 1, "checkversion": "224"})
+
+    return HubHandler
+
+
+def run_hub_listener(cfg: configparser.ConfigParser, csv_path: Path, sensors: dict) -> None:
+    port = cfg.getint("hub", "port", fallback=80)
+    handler = _make_hub_handler(cfg, csv_path, sensors)
+    try:
+        server = HTTPServer(("", port), handler)
+    except PermissionError:
+        log.error(
+            "Hub listener: cannot bind port %d — run as root or use port > 1024 "
+            "(set [hub] port = 8080 in config.ini)", port
+        )
+        return
+    log.info("Hub listener started on port %d", port)
+    server.serve_forever()
+
+
 # ── Discover mode ─────────────────────────────────────────────────────────────
 
 def run_discover(cfg: configparser.ConfigParser, duration_s: int = 300) -> None:
@@ -247,6 +355,12 @@ def run_daemon(cfg: configparser.ConfigParser) -> None:
     sensors = sensor_map(cfg)
     whitelist = set(sensors.keys()) if sensors else None
 
+    if cfg.has_section("hub"):
+        hub_thread = threading.Thread(
+            target=run_hub_listener, args=(cfg, csv_path, sensors), daemon=True
+        )
+        hub_thread.start()
+
     cmd = rtl433_cmd(cfg)
     log.info("Starting — writing to %s", csv_path)
     if whitelist:
@@ -285,7 +399,11 @@ def run_daemon(cfg: configparser.ConfigParser) -> None:
                     "humidity_pct": packet.get("humidity_pct"),
                     "wind_mph": packet.get("wind_mph"),
                     "wind_dir_deg": packet.get("wind_dir_deg"),
+                    "wind_gust_mph": packet.get("wind_gust_mph"),
                     "rain_in": packet.get("rain_in"),
+                    "pressure_inhg": packet.get("pressure_inhg"),
+                    "dew_point_f": packet.get("dew_point_f"),
+                    "uv_index": packet.get("uv_index"),
                     "battery_ok": packet.get("battery_ok"),
                 }
                 append_csv(csv_path, row)

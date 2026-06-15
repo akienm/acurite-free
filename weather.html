@@ -1,0 +1,320 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Weather</title>
+<style>
+  :root {
+    --bg: #000;
+    --surface: #111;
+    --border: #333;
+    --text: #e8e8e8;
+    --muted: #888;
+    --accent: #4af;
+    --warn: #f44;
+    --stale: #f44;
+    --font: "Courier New", Courier, monospace;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: var(--font);
+    font-size: 14px;
+    padding: 16px;
+  }
+  h1 { font-size: 16px; color: var(--muted); margin-bottom: 16px; letter-spacing: 1px; }
+  .ts { color: var(--muted); font-size: 12px; }
+  .stale { color: var(--stale) !important; }
+
+  /* ── Outdoor card ── */
+  .outdoor-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 20px;
+    margin-bottom: 20px;
+  }
+  .outdoor-name {
+    color: var(--accent);
+    font-size: 13px;
+    letter-spacing: 1px;
+    margin-bottom: 12px;
+  }
+  .outdoor-temp {
+    font-size: 72px;
+    font-weight: bold;
+    line-height: 1;
+    margin-bottom: 4px;
+  }
+  .outdoor-feels {
+    color: var(--muted);
+    font-size: 13px;
+    margin-bottom: 16px;
+  }
+  .outdoor-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(160px, 1fr));
+    gap: 12px;
+    margin-top: 8px;
+  }
+  .outdoor-stat { }
+  .outdoor-stat .label { color: var(--muted); font-size: 11px; letter-spacing: 1px; }
+  .outdoor-stat .value { font-size: 20px; margin-top: 2px; }
+
+  /* ── Indoor grid ── */
+  .section-label {
+    color: var(--muted);
+    font-size: 11px;
+    letter-spacing: 2px;
+    margin-bottom: 10px;
+  }
+  .indoor-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+    gap: 12px;
+  }
+  .indoor-card {
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    padding: 14px;
+  }
+  .indoor-name {
+    color: var(--accent);
+    font-size: 11px;
+    letter-spacing: 1px;
+    margin-bottom: 6px;
+  }
+  .indoor-temp { font-size: 32px; font-weight: bold; }
+  .indoor-hum { color: var(--muted); font-size: 13px; margin-top: 4px; }
+  .indoor-age { color: var(--muted); font-size: 11px; margin-top: 6px; }
+
+  /* ── Links ── */
+  .links {
+    margin-top: 24px;
+    padding-top: 12px;
+    border-top: 1px solid var(--border);
+    display: flex;
+    gap: 20px;
+    align-items: center;
+  }
+  .links a {
+    color: var(--muted);
+    text-decoration: none;
+    font-size: 12px;
+    letter-spacing: 1px;
+  }
+  .links a:hover { color: var(--accent); }
+
+  /* ── Error banner ── */
+  #error-banner {
+    display: none;
+    background: #300;
+    border: 1px solid var(--warn);
+    border-radius: 4px;
+    padding: 12px;
+    margin-bottom: 16px;
+    color: var(--warn);
+    font-size: 13px;
+  }
+
+  /* ── Footer ── */
+  .footer {
+    margin-top: 20px;
+    color: var(--muted);
+    font-size: 11px;
+  }
+</style>
+</head>
+<body>
+
+<div id="error-banner"></div>
+<h1>WEATHER</h1>
+<div id="content">
+  <div class="ts">Loading…</div>
+</div>
+<div class="links">
+  <a href="https://www.pandora.com" target="_blank">Pandora</a>
+  <a href="https://music.youtube.com" target="_blank">YouTube Music</a>
+  <a href="https://music.amazon.com" target="_blank">Amazon Music</a>
+</div>
+<div class="footer" id="footer"></div>
+
+<script>
+// ── Cardinal direction from degrees (16-point) ────────────────────────────────
+function degToCard(deg) {
+  if (deg == null) return '—';
+  const dirs = ['N','NNE','NE','ENE','E','ESE','SE','SSE','S','SSW','SW','WSW','W','WNW','NW','NNW'];
+  return dirs[Math.round(((deg % 360) + 360) % 360 / 22.5) % 16];
+}
+
+function fmt1(v) { return v == null ? '—' : Number(v).toFixed(1); }
+function fmtInt(v) { return v == null ? '—' : Math.round(Number(v)); }
+
+// ── Relative time ─────────────────────────────────────────────────────────────
+function relTime(isoStr) {
+  if (!isoStr) return '';
+  const d = new Date(isoStr);
+  const mins = Math.round((Date.now() - d.getTime()) / 60000);
+  if (mins < 1) return 'just now';
+  if (mins === 1) return '1 min ago';
+  if (mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  return `${hrs}h ago`;
+}
+
+function isStale(isoStr, thresholdMinutes) {
+  if (!isoStr) return true;
+  const mins = (Date.now() - new Date(isoStr).getTime()) / 60000;
+  return mins > thresholdMinutes;
+}
+
+// ── CSV parser ────────────────────────────────────────────────────────────────
+function parseCSV(text) {
+  const lines = text.trim().split('\n');
+  if (lines.length < 2) return [];
+  const headers = lines[0].split(',').map(h => h.trim());
+  return lines.slice(1).map(line => {
+    const vals = line.split(',');
+    const obj = {};
+    headers.forEach((h, i) => { obj[h] = (vals[i] || '').trim(); });
+    return obj;
+  });
+}
+
+// ── Detect sensor type ────────────────────────────────────────────────────────
+function isOutdoor(rows) {
+  return rows.some(r =>
+    (r.wind_mph !== '' && r.wind_mph !== null) ||
+    (r.uv_index !== '' && r.uv_index !== null) ||
+    (r.pressure_inhg !== '' && r.pressure_inhg !== null)
+  );
+}
+
+// ── Latest reading per sensor ─────────────────────────────────────────────────
+function latestBySensor(rows) {
+  const map = {};
+  for (const r of rows) {
+    const sid = r.sensor_id || r.sensor_name || 'unknown';
+    if (!map[sid] || r.timestamp > map[sid].timestamp) {
+      map[sid] = r;
+    }
+  }
+  return Object.values(map);
+}
+
+// ── Render ────────────────────────────────────────────────────────────────────
+function render(rows) {
+  const sensors = latestBySensor(rows);
+  const outdoors = sensors.filter(s => isOutdoor(rows.filter(r => (r.sensor_id || r.sensor_name) === (s.sensor_id || s.sensor_name))));
+  const indoors = sensors.filter(s => !isOutdoor(rows.filter(r => (r.sensor_id || r.sensor_name) === (s.sensor_id || s.sensor_name))));
+
+  let html = '';
+
+  // ── Outdoor sensors ──
+  for (const s of outdoors) {
+    const staleClass = isStale(s.timestamp, 10) ? ' stale' : '';
+    const name = (s.sensor_name || s.sensor_id || 'Outdoor').toUpperCase();
+    const windCard = `${degToCard(s.wind_dir_deg || null)}`;
+    html += `
+      <div class="outdoor-card">
+        <div class="outdoor-name${staleClass}">${name}</div>
+        <div class="outdoor-temp${staleClass}">${fmt1(s.temp_f || null)}°</div>
+        <div class="outdoor-feels ts">humidity ${fmtInt(s.humidity_pct || null)}%
+          &nbsp;·&nbsp; <span class="${staleClass.trim() || 'ts'}">${relTime(s.timestamp)}</span>
+        </div>
+        <div class="outdoor-grid">
+          <div class="outdoor-stat">
+            <div class="label">WIND</div>
+            <div class="value">${fmt1(s.wind_mph || null)} <span style="font-size:14px">mph ${windCard}</span></div>
+          </div>
+          <div class="outdoor-stat">
+            <div class="label">GUST</div>
+            <div class="value">${fmt1(s.wind_gust_mph || null)} <span style="font-size:14px">mph</span></div>
+          </div>
+          <div class="outdoor-stat">
+            <div class="label">RAIN</div>
+            <div class="value">${fmt1(s.rain_in || null)}<span style="font-size:14px">"</span></div>
+          </div>
+          <div class="outdoor-stat">
+            <div class="label">PRESSURE</div>
+            <div class="value">${fmt1(s.pressure_inhg || null)} <span style="font-size:14px">inHg</span></div>
+          </div>
+          <div class="outdoor-stat">
+            <div class="label">DEW POINT</div>
+            <div class="value">${fmt1(s.dew_point_f || null)}°</div>
+          </div>
+          <div class="outdoor-stat">
+            <div class="label">UV INDEX</div>
+            <div class="value">${fmtInt(s.uv_index || null)}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // ── Indoor sensors ──
+  if (indoors.length > 0) {
+    html += `<div class="section-label">INDOOR</div><div class="indoor-grid">`;
+    for (const s of indoors) {
+      const staleClass = isStale(s.timestamp, 30) ? ' stale' : '';
+      const name = (s.sensor_name || s.sensor_id || 'Indoor').toUpperCase();
+      html += `
+        <div class="indoor-card">
+          <div class="indoor-name${staleClass}">${name}</div>
+          <div class="indoor-temp${staleClass}">${fmt1(s.temp_f || null)}°</div>
+          <div class="indoor-hum">humidity ${fmtInt(s.humidity_pct || null)}%</div>
+          <div class="indoor-age ts">${relTime(s.timestamp)}</div>
+        </div>`;
+    }
+    html += `</div>`;
+  }
+
+  if (!html) {
+    html = '<div class="ts">No sensor data yet.</div>';
+  }
+
+  document.getElementById('content').innerHTML = html;
+}
+
+// ── Fetch + refresh ───────────────────────────────────────────────────────────
+async function load() {
+  const banner = document.getElementById('error-banner');
+  try {
+    const resp = await fetch('weather.csv?t=' + Date.now());
+    if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
+    const text = await resp.text();
+    banner.style.display = 'none';
+    const rows = parseCSV(text);
+    render(rows);
+    document.getElementById('footer').textContent =
+      'Updated: ' + new Date().toLocaleTimeString();
+  } catch (e) {
+    banner.textContent = 'Could not load weather.csv — ' + e.message;
+    banner.style.display = 'block';
+  }
+}
+
+load();
+setInterval(load, 60000);
+
+// ── PWA manifest (inline blob) ────────────────────────────────────────────────
+(function() {
+  const manifest = {
+    name: 'Weather',
+    short_name: 'Weather',
+    display: 'standalone',
+    background_color: '#000',
+    theme_color: '#000',
+    icons: []
+  };
+  const blob = new Blob([JSON.stringify(manifest)], {type: 'application/manifest+json'});
+  const link = document.createElement('link');
+  link.rel = 'manifest';
+  link.href = URL.createObjectURL(blob);
+  document.head.appendChild(link);
+})();
+</script>
+</body>
+</html>
