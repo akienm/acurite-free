@@ -1,0 +1,32 @@
+[device]
+; Local folder where weather.csv (and weather.html) will be written.
+; Sync this folder to your cloud storage — OneDrive, Google Drive, Dropbox, etc.
+; Share the folder publicly and use that URL to access weather.html.
+write_path = ~/AcuRite
+
+[sensors]
+; Map your sensor IDs to display names.
+; Run:  python3 acurite-capture.py --discover
+; to find your sensor IDs. Then add them here.
+;
+; 1234 = Backyard
+; 5678 = Garage
+; 9012 = Roof
+
+[weather_underground]
+; Optional — set enabled = true and fill in your WU station credentials.
+enabled = false
+; station_id = YOUR_WU_STATION_ID
+; station_key = YOUR_WU_STATION_KEY
+
+[capture]
+; RTL-SDR device index (0 = first dongle found).
+device_index = 0
+
+; AcuRite protocol numbers recognised by rtl_433.
+; 40  = AcuRite 5-in-1 / 00899 / Atlas (earlier firmware)
+; 78  = AcuRite 592TXR Tower sensor (temp + humidity only)
+; 112 = AcuRite 00275rm
+; 191 = AcuRite Atlas (later firmware)
+; Add more if you have other AcuRite devices — see: rtl_433 -R help
+protocols = 40,78,112,191

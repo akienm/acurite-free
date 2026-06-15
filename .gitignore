@@ -1,0 +1,7 @@
+__pycache__/
+*.pyc
+*.pyo
+config.ini
+weather.csv
+*.log
+.DS_Store

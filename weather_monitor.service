@@ -1,0 +1,16 @@
+[Unit]
+Description=AcuRite Weather Capture
+Documentation=https://github.com/akienm/acurite-free
+After=network.target
+
+[Service]
+Type=simple
+User=%i
+ExecStart=/usr/bin/python3 /home/%i/dev/src/acurite-free/acurite-capture.py
+Restart=always
+RestartSec=10
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
